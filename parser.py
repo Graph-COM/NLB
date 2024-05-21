@@ -38,6 +38,7 @@ def get_args():
   parser.add_argument('--verbosity', type=int, default=1, help='verbosity of the program output')
   parser.add_argument('--run', type=int, default=2, help='number of model runs')
   parser.add_argument('--model_path', type=str, default="", help='path to NLB trained model to be loaded')
+  parser.add_argument('--eval_neg_samples', type=int, default=1, help='how many negative samples to use at inference. Note: this will change the metric of test set to AP+AUC to MRR!')
 
 
   try:

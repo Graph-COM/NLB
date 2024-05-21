@@ -76,6 +76,7 @@ elif DATA == 'WIKI' or DATA == 'REDDIT':
 else:
   node_feats = None
   edge_feats = None
+  edge_feat_in_gpu = True
 
 if min_idx == 0:
   # move the node ids to start from 1
@@ -96,8 +97,7 @@ if node_feats is not None:
   if node_feats.dtype == torch.bool:
     node_feats = node_feats.type(torch.float32)
   n_feat = node_feats.numpy()
-  print(n_feat.shape[0])
-  print(max_idx + 1)
+
   assert(n_feat.shape[0] == max_idx + 1)  # the nodes need to map one-to-one to the node feat matrix
 else:
   n_feat = None
@@ -129,7 +129,6 @@ for run in range(args.run):
     valid_train_flag = (ts_l <= val_time)
     valid_val_flag = (ts_l <= test_time) * (ts_l > val_time)
     valid_test_flag = ts_l > test_time
-
 
   else:
     assert(args.mode == 'i')
@@ -191,7 +190,7 @@ for run in range(args.run):
   total_start = time.time()
   nlb = NLB(feat_dim, e_feat_dim, memory_dim, max_idx + 1, time_dim=TIME_DIM, n_head=ATTN_NUM_HEADS, num_neighbors=num_neighbors, dropout=DROP_OUT, attn_dropout=ATTN_DROPOUT,
     get_checkpoint_path=get_checkpoint_path, get_ngh_store_path=get_ngh_store_path, get_self_rep_path=get_self_rep_path, get_prev_raw_path=get_prev_raw_path, verbosity=VERBOSITY,
-  n_hops=NUM_HOP, replace_prob=REPLACE_PROB, self_dim=SELF_DIM, device=device, nlb_node=NLB_NODE)
+  n_hops=NUM_HOP, replace_prob=REPLACE_PROB, self_dim=SELF_DIM, device=device, nlb_node=NLB_NODE, data_name=DATA)
   nlb.to(device)
   if args.mode == 'i':
     nlb.set_edge_features(edge_feats_inductive, train_e_idx_l, val_e_idx_l, test_e_idx_l, edge_feat_load_to_gpu_partition_size=EDGE_FEAT_LOAD_TO_GPU_PARTITION_SIZE, to_gpu=edge_feat_in_gpu)
@@ -218,7 +217,7 @@ for run in range(args.run):
     build_history_interactions('rebuild for {} nodes'.format(args.mode), nlb, all_train_val_src_l, all_train_val_tgt_l, all_train_val_ts_l, all_train_val_label_l, all_train_val_e_idx_l, bs=EVAL_BS, device=device)
     nlb.set_edge_features(edge_feats_inductive, train_e_idx_l, val_e_idx_l, test_e_idx_l, edge_feat_load_to_gpu_partition_size=EDGE_FEAT_LOAD_TO_GPU_PARTITION_SIZE, to_gpu=edge_feat_in_gpu)
   test_start = time.time()
-  test_acc, test_ap, test_f1, test_auc, predict_total_time = eval_one_epoch('test for {} nodes'.format(args.mode), nlb, test_src_l, test_tgt_l, test_ts_l, test_label_l, test_e_idx_l, bs=EVAL_BS, phase='test', mode=args.mode, device=device, all_nodes=all_nodes)
+  test_acc, test_ap, test_f1, test_auc, predict_total_time = eval_one_epoch('test for {} nodes'.format(args.mode), nlb, test_src_l, test_tgt_l, test_ts_l, test_label_l, test_e_idx_l, bs=EVAL_BS, phase='test', mode=args.mode, device=device, all_nodes=all_nodes, eval_neg_samples=args.eval_neg_samples)
   test_end = time.time()
   logger.info('Test statistics: {} all nodes -- acc: {}, auc: {}, ap: {}, inference time: {}, total test time: {}'.format(args.mode, test_acc, test_auc, test_ap, predict_total_time, test_end - test_start))
   test_new_new_acc, test_new_new_ap, test_new_new_auc, test_new_old_acc, test_new_old_ap, test_new_old_auc = [-1]*6

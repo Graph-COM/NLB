@@ -52,7 +52,7 @@ conda install tqdm==4.41.1
 
 * To train **NLB-edge** with Wikipedia dataset in transductive training, with 20 down-sampled temporal neighbors, 100 dims for node status, and with replacement probability alpha 0.8:
 ```bash
-python main.py -d WIKI --pos_dim 0 --bs 100 --n_degree 20 --n_hop 1 --mode t --bias 1e-5 --verbosity 1 --drop_out 0.2 --attn_dropout 0.2 --attn_n_head 2 --ngh_dim 0 --self_dim 100 --replace_prob 0.8 --lr 0.0001 --time_dim 100 --n_epoch 30 --gpu 0 --seed 21 --run 5
+python main.py -d WIKI --pos_dim 0 --bs 100 --n_degree 20 --n_hop 1 --mode t --bias 1e-5 --verbosity 1 --drop_out 0.2 --attn_dropout 0.2 --attn_n_head 2 --self_dim 100 --replace_prob 0.8 --lr 0.0001 --time_dim 100 --n_epoch 30 --gpu 0 --seed 21 --run 5
 ```
 To train **NLB-edge** in inductive training, change `mode` from `t` to `i`. Here is an example of inductive training on Reddit with 20 down-sampled temporal neighbors, 100 dims for node status, and with replacement probability alpha 0.9.
 ```bash
@@ -61,7 +61,7 @@ python main.py -d REDDIT --bs 100 --n_degree 1 --n_hop 1 --mode i --bias 1e-5 --
 
 To run **NLB-edge** for node classification, use the `main_node.py`. Here is an example of node classification on Reddit with 20 down-sampled temporal neighbors, 100 dims for node status, and with replacement probability alpha 0.9.
 ```bash
-python main_node.py -d REDDIT --pos_dim 1 --bs 100 --n_degree 20 --n_hop 1 --mode t --bias 1e-5 --verbosity 1 --drop_out 0.2 --attn_dropout 0.2 --attn_n_head 2 --ngh_dim 0 --self_dim 100 --replace_prob 0.9 --lr 0.0001 --time_dim 100 --run 1 --n_epoch 30 --gpu 0 --seed 21 --run 5 --model_path ${your_best_model_path}
+python main_node.py -d REDDIT --pos_dim 1 --bs 100 --n_degree 20 --n_hop 1 --mode t --bias 1e-5 --verbosity 1 --drop_out 0.2 --attn_dropout 0.2 --attn_n_head 2 --self_dim 100 --replace_prob 0.9 --lr 0.0001 --time_dim 100 --run 1 --n_epoch 30 --gpu 0 --seed 21 --run 5 --model_path ${your_best_model_path}
 ```
 Use `--nlb_node` to switch to **NLB-node**.
 

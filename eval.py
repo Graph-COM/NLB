@@ -44,7 +44,7 @@ def build_history_interactions(hint, model, src, tgt, ts, label, e_id, bs=2000, 
 
 # Phase = [train, val, test]
 # mode = [t, i] # transductive or inductive
-def eval_one_epoch(hint, model, src, tgt, ts, label, e_id, bs=2000, phase=None, mode=None, device=None, all_nodes=None):
+def eval_one_epoch(hint, model, src, tgt, ts, label, e_id, bs=2000, phase=None, mode=None, device=None, all_nodes=None, eval_neg_samples=1):
   val_acc, val_ap, val_f1, val_auc = [], [], [], []
   if model.edge_feats_partitions != None:
     model.reset_edge_feat_partition_to_cpu()
@@ -70,7 +70,6 @@ def eval_one_epoch(hint, model, src, tgt, ts, label, e_id, bs=2000, phase=None, 
     model = model.eval()
     TEST_BATCH_SIZE = bs
     num_test_instance = len(src)
-    # 
     b_max = math.ceil(num_test_instance / TEST_BATCH_SIZE)
     b_min = 0
     predict_total_time = 0
@@ -86,21 +85,31 @@ def eval_one_epoch(hint, model, src, tgt, ts, label, e_id, bs=2000, phase=None, 
       src_l_cut = src[batch_idx]
       tgt_l_cut = tgt[batch_idx]
       bad_l_cut = bad[batch_idx]
+      size = len(src_l_cut)
+      if eval_neg_samples > 1:
+        if mode == 't':
+          bad_l_cut = np.random.randint(1, model.total_nodes, size=size*eval_neg_samples)
+        else:
+          bad_l_cut = np.random.choice(all_nodes, size=size*eval_neg_samples)
+        bad_l_cut = torch.from_numpy(bad_l_cut).to(dtype=torch.long, device=device)
       ts_l_cut = ts[batch_idx]
       e_l_cut = e_id_remap[batch_idx] if (e_idx is not None) else None
 
       size = len(src_l_cut)
-      pos_prob, neg_prob, predict_time = model.contrast(src_l_cut, tgt_l_cut, bad_l_cut, ts_l_cut, e_l_cut)
+      pos_prob, neg_prob, predict_time = model.contrast(src_l_cut, tgt_l_cut, bad_l_cut, ts_l_cut, e_l_cut, neg_samples=eval_neg_samples)
       predict_total_time += predict_time
       time_start = time.time()
-      pred_score = torch.cat((pos_prob, neg_prob), 0).sigmoid().cpu().numpy()
-      pred_label = pred_score > 0.5
-      true_label = np.concatenate([np.ones(size), np.zeros(size)])
+      if eval_neg_samples == 1:
+        pred_score = torch.cat((pos_prob, neg_prob), 0).sigmoid().cpu().numpy()
+        pred_label = pred_score > 0.5
+        true_label = np.concatenate([np.ones(size), np.zeros(size)])
 
-      val_acc.append((pred_label == true_label).mean())
-      pred_score[np.isnan(pred_score)] = 0
-      val_ap.append(average_precision_score(true_label, pred_score))
-      val_auc.append(roc_auc_score(true_label, pred_score))
+        val_acc.append((pred_label == true_label).mean())
+        pred_score[np.isnan(pred_score)] = 0
+        val_ap.append(average_precision_score(true_label, pred_score))
+        val_auc.append(roc_auc_score(true_label, pred_score))
+      else:
+        mrr = torch.reciprocal(torch.sum(pos_prob.squeeze() < neg_prob.squeeze().reshape(eval_neg_samples, -1), dim=0) + 1).type(torch.float64).cpu()
       time_end = time.time()
   return np.mean(val_acc), np.mean(val_ap), None, np.mean(val_auc), predict_total_time
 

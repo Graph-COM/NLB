@@ -67,6 +67,7 @@ else:
   e_idx_l = g_df.idx.values.astype(int)
   edge_feats = torch.load('./DATA/{}/edge_features_remap.pt'.format(DATA))
   node_feats = None
+  edge_feats.requires_grad = False
   edge_feat_in_gpu = True
   
 e_idx_total = g_df.idx.values.astype(int)
@@ -151,15 +152,15 @@ for run in range(args.run):
   total_start = time.time()
   nlb = NLB(feat_dim, e_feat_dim, memory_dim, max_idx + 1, time_dim=TIME_DIM, n_head=ATTN_NUM_HEADS, num_neighbors=num_neighbors, dropout=DROP_OUT, attn_dropout=ATTN_DROPOUT,
     get_checkpoint_path=get_checkpoint_path, get_ngh_store_path=get_ngh_store_path, get_self_rep_path=get_self_rep_path, get_prev_raw_path=get_prev_raw_path, verbosity=VERBOSITY,
-  n_hops=NUM_HOP, replace_prob=REPLACE_PROB, self_dim=SELF_DIM, device=device, nlb_node=NLB_NODE)
+  n_hops=NUM_HOP, replace_prob=REPLACE_PROB, self_dim=SELF_DIM, device=device, nlb_node=NLB_NODE, data_name=DATA)
   
-
+  nlb.set_edge_features(edge_feats, e_idx_total, edge_feat_load_to_gpu_partition_size=EDGE_FEAT_LOAD_TO_GPU_PARTITION_SIZE, to_gpu=edge_feat_in_gpu)
+  nlb.set_node_features(node_feats, to_gpu=NODE_TO_GPU)
   state_dict = torch.load(MODEL_PATH,map_location='cpu')
 
   nlb.load_state_dict(state_dict)
   nlb.to(device)
-  nlb.set_edge_features(edge_feats, e_idx_total, edge_feat_load_to_gpu_partition_size=EDGE_FEAT_LOAD_TO_GPU_PARTITION_SIZE, to_gpu=edge_feat_in_gpu)
-  nlb.set_node_features(node_feats, to_gpu=NODE_TO_GPU)
+
 
   nlb.reset_store()
   optimizer = torch.optim.Adam(nlb.parameters(), lr=LEARNING_RATE)
@@ -178,7 +179,6 @@ for run in range(args.run):
   #####################################
   #### Get Embedding first before training
   # generate temporal embeddings
-  # emb_file_name = DATA + '.pt'
   emb, rows, node_edges = generate_temporal_embeddings(data, nlb, args.mode, BATCH_SIZE, logger, model_dim, runtime_id, n_hop=NUM_HOP, seed=SEED)
   node_ts = rows[:, 0]
   train_node_flag = (node_ts <= val_time)

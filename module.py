@@ -12,7 +12,7 @@ args, sys_argv = get_args()
 
 class NLB(torch.nn.Module):
   def __init__(self, n_feat_dim, e_feat_dim, memory_dim, total_nodes, get_checkpoint_path=None, get_ngh_store_path=None, get_self_rep_path=None, get_prev_raw_path=None, time_dim=50, n_head=4, num_neighbors=['1', '32'],
-      dropout=0.1, attn_dropout=0.1, verbosity=1, seed=1, n_hops=2, replace_prob=0.9, self_dim=100, device=None, nlb_node=False):
+      dropout=0.1, attn_dropout=0.1, verbosity=1, seed=1, n_hops=2, replace_prob=0.9, self_dim=100, device=None, nlb_node=False, data_name=None):
     super(NLB, self).__init__()
     self.logger = logging.getLogger(__name__)
     self.dropout = dropout
@@ -41,7 +41,7 @@ class NLB(torch.nn.Module):
     self.memory_dim = memory_dim
     self.verbosity = verbosity
     
-    self.attn_dim = self.feat_dim + self.self_dim + self.time_dim + self.e_feat_dim
+    self.attn_dim = self.feat_dim + self.self_dim + self.time_dim + self.e_feat_dim + 1
     self.gat = GAT(1, [n_head], [self.attn_dim, self.self_dim], add_skip_connection=False, bias=False,
                  dropout=dropout, attn_dropout=attn_dropout, log_attention_weights=True)
     self.total_nodes = total_nodes
@@ -49,7 +49,8 @@ class NLB(torch.nn.Module):
     self.self_rep_linear = nn.Linear(self.self_dim + self.time_dim + self.e_feat_dim, self.self_dim, bias=False)
     self.self_aggregator = self.init_self_aggregator() # RNN
     self.merger = MergeLayer(self.self_dim, self_dim, self_dim, self_dim)
-  
+    self.data_name = data_name
+    self.trainable_embedding = nn.Embedding(num_embeddings=2, embedding_dim=1)
   def set_seed(self, seed):
     self.seed = seed
 
@@ -116,7 +117,7 @@ class NLB(torch.nn.Module):
     ngh_stores = []
     self.num_neighbors_stored = 0
     ngh_store_type = torch.float32 # by default use float
-    if self.e_feat_dim == 0: # this is a special case for dataset MAG. The ID are too big to be represented by float
+    if self.data_name == 'MAG': # this is a special case for dataset MAG. The ID are too big to be represented by float
       ngh_store_type = torch.int32
     for i in self.num_neighbors:
       self.num_neighbors_stored += i
@@ -156,35 +157,36 @@ class NLB(torch.nn.Module):
       e_feat = self.edge_raw_embed(e_idx_th)
     return e_feat
 
-  def contrast(self, src_l_cut, tgt_l_cut, bad_l_cut, cut_time_l, e_idx_l=None):
+  def contrast(self, src_l_cut, tgt_l_cut, bad_l_cut, cut_time_l, e_idx_l=None, neg_samples=1):
     predict_start = time.time()
     batch_size = len(src_l_cut)
     
-    updated_embeddings, updated_mem_h0, updated_mem_h1, _ = self.updated_embeddings(batch_size, src_l_cut, tgt_l_cut, bad_l_cut, cut_time_l)
-    p_score, n_score = self.forward(updated_embeddings)
+    updated_embeddings, updated_mem_h0, updated_mem_h1, _ = self.updated_embeddings(batch_size, src_l_cut, tgt_l_cut, bad_l_cut, cut_time_l, neg_samples=neg_samples)
+    p_score, n_score = self.forward(updated_embeddings, neg_samples=neg_samples)
     predict_end = time.time()
     predict_time = predict_end - predict_start
     e_feat = self.fetch_edge_feat(e_idx_l)
     self.update_memory(src_l_cut, tgt_l_cut, e_feat, cut_time_l, updated_embeddings, updated_mem_h1, batch_size)
     return p_score, n_score, predict_time
 
-  def updated_embeddings(self, batch_size, src_th, tgt_th, bad_th, cut_time_th, e_feat=None):
+  def updated_embeddings(self, batch_size, src_th, tgt_th, bad_th, cut_time_th, e_feat=None, neg_samples=1):
     idx_th = torch.cat((src_th, tgt_th, bad_th), 0)
-    batch_idx = torch.arange(batch_size * 3, device=self.device)
+    batch_idx = torch.arange(batch_size * (2+neg_samples), device=self.device)
     self.neighborhood_store[0][idx_th, 0] = idx_th.type(self.neighborhood_store[0].dtype)
-
-    ngh_id, updated_mem_h0 = self.batch_fetch_temporal_neighbors(idx_th, cut_time_th.repeat(3), hop=0)
+    
+    pos_bits = self.position_bits((2+neg_samples) * batch_size, hop=0)
+    ngh_id, updated_mem_h0 = self.batch_fetch_temporal_neighbors(idx_th, cut_time_th.repeat((2+neg_samples)), hop=0)
     feature_dim = self.memory_dim
-    updated_mem = updated_mem_h0.view(3 * batch_size, self.num_neighbors[0], -1)
-    ngh_id = ngh_id.view(3 * batch_size, self.num_neighbors[0])
+    updated_mem = updated_mem_h0.view((2+neg_samples) * batch_size, self.num_neighbors[0], -1)
+    ngh_id = ngh_id.view((2+neg_samples) * batch_size, self.num_neighbors[0])
     updated_mem_h1 = None
     if self.n_hops > 0:
-      h1_pos_bit = self.position_bits(3 * batch_size, hop=1)
-      ngh_id_h1,updated_mem_h1 = self.batch_fetch_temporal_neighbors(idx_th, cut_time_th.repeat(3), hop=1)      
-      ngh_id = torch.cat((ngh_id, ngh_id_h1.view(3 * batch_size, self.num_neighbors[1])), -1)
+      pos_bits = torch.cat((pos_bits, self.position_bits((2+neg_samples) * batch_size, hop=1)), 0)
+      ngh_id_h1,updated_mem_h1 = self.batch_fetch_temporal_neighbors(idx_th, cut_time_th.repeat((2+neg_samples)), hop=1)      
+      ngh_id = torch.cat((ngh_id, ngh_id_h1.view((2+neg_samples) * batch_size, self.num_neighbors[1])), -1)
       updated_mem = torch.cat((
         updated_mem,
-        updated_mem_h1.view(3 * batch_size, self.num_neighbors[1], -1)), 1)
+        updated_mem_h1.view((2+neg_samples) * batch_size, self.num_neighbors[1], -1)), 1)
       if not torch.is_floating_point(self.neighborhood_store[0]):
         updated_mem_h1 = torch.cat((ngh_id_h1.unsqueeze(1), updated_mem_h1[:, self.ngh_id_idx + 1:].int()), -1)
     if self.n_hops > 1:
@@ -193,7 +195,7 @@ class NLB(torch.nn.Module):
     e_and_t_feats = updated_mem[:, self.e_feat_idx:]
     ngh_id = ngh_id.flatten().long()
     ngh_exists = torch.nonzero(ngh_id, as_tuple=True)[0]
-    ngh_count = torch.count_nonzero(ngh_id.view(3 * batch_size, -1), dim=-1)
+    ngh_count = torch.count_nonzero(ngh_id.view((2+neg_samples) * batch_size, -1), dim=-1)
     if self.node_raw_embed is not None:
       storage_device = self.node_raw_embed.device
     else:
@@ -216,14 +218,15 @@ class NLB(torch.nn.Module):
 
 
     ngh_self_rep = ngh_self_rep.index_select(0, ngh_exists)
+    pos_bits = self.trainable_embedding(pos_bits.index_select(0, ngh_exists))
     if self.node_raw_embed is not None:
-      hidden_states = torch.cat((node_features, ngh_self_rep, e_and_t_feats), -1)
+      hidden_states = torch.cat((node_features, ngh_self_rep, e_and_t_feats, pos_bits), -1)
     else:
-      hidden_states = torch.cat((ngh_self_rep, e_and_t_feats), -1)
+      hidden_states = torch.cat((ngh_self_rep, e_and_t_feats, pos_bits), -1)
       node_features = None
     ngh_and_batch_id = torch.cat((ngh_id_for_fetch.unsqueeze(1), sparse_idx.unsqueeze(1)), -1)
     
-    embeddings = self.aggregate(ngh_and_batch_id, hidden_states, batch_size, self_reps)
+    embeddings = self.aggregate(ngh_and_batch_id, hidden_states, batch_size, self_reps, neg_samples)
    
     return embeddings, updated_mem_h0, updated_mem_h1, node_features
 
@@ -317,7 +320,7 @@ class NLB(torch.nn.Module):
     should_replace =  (is_occupied * torch.rand(is_occupied.shape[0], device=self.device)) < self.replace_prob
     idx *= should_replace
     idx *= ngh_id != 0
-    self.neighborhood_store[hop][idx] = candidate_temporal_neighbors
+    self.neighborhood_store[hop][idx] = candidate_temporal_neighbors.to(self.neighborhood_store[hop].dtype)
 
   def batch_fetch_temporal_neighbors(self, ori_idx, curr_time, hop):
     ngh = self.neighborhood_store[hop].view(self.total_nodes, self.num_neighbors[hop], self.memory_dim)[ori_idx].view(ori_idx.shape[0] * (self.num_neighbors[hop]), self.memory_dim)
@@ -327,18 +330,17 @@ class NLB(torch.nn.Module):
     ngh_ts_raw = ngh[:,self.ts_raw_idx]
     ts_feat = self.time_encoder(ngh_ts_raw.float())
 
-    msk = ngh_ts_raw < curr_time
     ngh_info = torch.cat((ngh, ts_feat), -1)
-    return ngh_id, ngh_info# * msk.unsqueeze(1).repeat(1, ngh_info.shape[1])
+    return ngh_id, ngh_info
 
 
-  def forward(self, embeddings):
-    return self.out_layer(embeddings)
+  def forward(self, embeddings, neg_samples=1):
+    return self.out_layer(embeddings, neg_samples)
 
 
-  def aggregate(self, ngh_and_batch_id, feat, bs, self_rep=None):
+  def aggregate(self, ngh_and_batch_id, feat, bs, self_rep=None, neg_samples=1):
     edge_idx = ngh_and_batch_id.T
-    embed, _, attn_score = self.gat((feat, edge_idx, 3*bs))
+    embed, _, attn_score = self.gat((feat, edge_idx, (2+neg_samples)*bs))
     if self_rep is not None:
       embed = self.merger(embed, self_rep)
     return embed
@@ -363,20 +365,6 @@ class FeatureEncoderGRU(torch.nn.Module):
     
     return encoded_features
 
-
-# class TimeEncode(torch.nn.Module):
-
-#   def __init__(self, dim):
-#     super(TimeEncode, self).__init__()
-#     self.dim = dim
-#     self.w = torch.nn.Linear(1, dim)
-#     self.w.weight = torch.nn.Parameter((torch.from_numpy(1 / 10 ** np.linspace(0, 9, dim, dtype=np.float32))).reshape(dim, -1))
-#     self.w.bias = torch.nn.Parameter(torch.zeros(dim))
-
-#   def forward(self, t):
-#     output = torch.cos(self.w(t.reshape((-1, 1))))
-#     return output
-
 class TimeEncode(torch.nn.Module):
   def __init__(self, expand_dim, factor=5):
     super(TimeEncode, self).__init__()
@@ -396,8 +384,8 @@ class TimeEncode(torch.nn.Module):
     map_ts += self.phase.view(1, -1) # [N, time_dim]
     harmonic = torch.cos(map_ts)
 
-    # return torch.zeros_like(ts)
-    return harmonic #self.dense(harmonic)
+    return harmonic
+
 class MergeLayer(torch.nn.Module):
   def __init__(self, dim1, dim2, dim3, dim4):
     super().__init__()
